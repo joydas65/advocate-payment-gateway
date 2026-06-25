@@ -23,7 +23,8 @@ export default function PayFeesPage() {
 
           <p className="mt-5 max-w-3xl text-lg leading-8 text-slate-600">
             Use this page only after the payment amount has been advised by the
-            advocate or chamber.
+            advocate or chamber. Payments can be made securely through UPI, card,
+            net banking, wallet or other available gateway options.
           </p>
         </div>
       </section>
@@ -50,6 +51,7 @@ export default function PayFeesPage() {
 
             <ul className="mt-5 space-y-3 text-sm leading-6 text-slate-600">
               <li>• Make payment only after the amount has been advised.</li>
+              <li>• Available payment modes will be shown securely by the payment gateway.</li>
               <li>• Keep the transaction confirmation for reference.</li>
               <li>• Payment does not by itself confirm professional engagement.</li>
               <li>• For duplicate or incorrect payments, contact the chamber.</li>

@@ -11,6 +11,67 @@ type PaymentFormState = {
   accepted: boolean;
 };
 
+type CreateOrderResponse = {
+  keyId: string;
+  orderId: string;
+  amount: number;
+  currency: string;
+  receipt: string;
+};
+
+type RazorpaySuccessResponse = {
+  razorpay_payment_id: string;
+  razorpay_order_id: string;
+  razorpay_signature: string;
+};
+
+type RazorpayFailureResponse = {
+  error?: {
+    description?: string;
+    reason?: string;
+  };
+};
+
+type RazorpayOptions = {
+  key: string;
+  amount: number;
+  currency: string;
+  name: string;
+  description: string;
+  order_id: string;
+  prefill: {
+    name: string;
+    email?: string;
+    contact: string;
+  };
+  notes: {
+    matterReference: string;
+    receipt: string;
+  };
+  theme: {
+    color: string;
+  };
+  handler: (response: RazorpaySuccessResponse) => void;
+  modal: {
+    confirm_close: boolean;
+    ondismiss: () => void;
+  };
+};
+
+type RazorpayInstance = {
+  open: () => void;
+  on: (
+    event: "payment.failed",
+    callback: (response: RazorpayFailureResponse) => void
+  ) => void;
+};
+
+declare global {
+  interface Window {
+    Razorpay?: new (options: RazorpayOptions) => RazorpayInstance;
+  }
+}
+
 const initialState: PaymentFormState = {
   name: "",
   mobile: "",
@@ -20,9 +81,29 @@ const initialState: PaymentFormState = {
   accepted: false,
 };
 
+function loadRazorpayScript() {
+  return new Promise<boolean>((resolve) => {
+    const existingScript = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]'
+    );
+
+    if (existingScript) {
+      resolve(true);
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 export default function PaymentForm() {
   const [form, setForm] = useState(initialState);
   const [message, setMessage] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const amountValue = Number(form.amount);
 
@@ -45,7 +126,7 @@ export default function PaymentForm() {
     setMessage("");
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!isValid) {
@@ -53,9 +134,129 @@ export default function PaymentForm() {
       return;
     }
 
-    setMessage(
-      "Payment gateway integration is pending. After Razorpay/Cashfree activation, this button will redirect to a secure payment page."
-    );
+    try {
+      setIsProcessing(true);
+      setMessage("Creating secure payment request...");
+
+      const scriptLoaded = await loadRazorpayScript();
+
+      if (!scriptLoaded || !window.Razorpay) {
+        setMessage("Unable to load secure payment window. Please check your internet connection and try again.");
+        setIsProcessing(false);
+        return;
+      }
+
+      const response = await fetch("/api/payments/create-order", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          clientName: form.name.trim(),
+          mobile: form.mobile.trim(),
+          email: form.email.trim(),
+          matterReference: form.matterReference.trim(),
+          amount: amountValue,
+          acknowledgementAccepted: form.accepted,
+        }),
+      });
+
+      const order = (await response.json()) as CreateOrderResponse & {
+        error?: string;
+        details?: string;
+      };
+
+      if (!response.ok) {
+        setMessage(order.details || order.error || "Unable to create payment order. Please try again.");
+        setIsProcessing(false);
+        return;
+      }
+
+      setMessage("Opening secure payment window...");
+
+      const razorpay = new window.Razorpay({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        name: "Sudipto Panda, Advocate",
+        description: "Professional fees",
+        order_id: order.orderId,
+        prefill: {
+          name: form.name.trim(),
+          email: form.email.trim() || undefined,
+          contact: `+91${form.mobile.trim()}`,
+        },
+        notes: {
+          matterReference: form.matterReference.trim(),
+          receipt: order.receipt,
+        },
+        theme: {
+          color: "#7f1d1d",
+        },
+        handler: async (paymentResponse) => {
+            setMessage("Verifying payment...");
+
+            const verifyResponse = await fetch("/api/payments/verify", {
+                method: "POST",
+                headers: {
+                "Content-Type": "application/json",
+                },
+                body: JSON.stringify(paymentResponse),
+            });
+
+            const verification = await verifyResponse.json();
+
+            if (!verifyResponse.ok || !verification.verified) {
+                const params = new URLSearchParams({
+                reason: verification.error || "Payment verification failed",
+                order_id: paymentResponse.razorpay_order_id,
+                reference: form.matterReference.trim() || order.receipt,
+                });
+
+                window.location.href = `/payment/failure?${params.toString()}`;
+                return;
+            }
+
+            const params = new URLSearchParams({
+                payment_id: paymentResponse.razorpay_payment_id,
+                order_id: paymentResponse.razorpay_order_id,
+                reference: form.matterReference.trim() || order.receipt,
+            });
+
+            window.location.href = `/payment/success?${params.toString()}`;
+        },
+        modal: {
+          confirm_close: true,
+          ondismiss: () => {
+            const params = new URLSearchParams({
+              reason: "Payment window closed",
+              order_id: order.orderId,
+              reference: form.matterReference.trim() || order.receipt,
+            });
+
+            window.location.href = `/payment/failure?${params.toString()}`;
+          },
+        },
+      });
+
+      razorpay.on("payment.failed", (failureResponse) => {
+        const params = new URLSearchParams({
+          reason:
+            failureResponse.error?.description ||
+            failureResponse.error?.reason ||
+            "Payment failed",
+          order_id: order.orderId,
+          reference: form.matterReference.trim() || order.receipt,
+        });
+
+        window.location.href = `/payment/failure?${params.toString()}`;
+      });
+
+      razorpay.open();
+    } catch {
+      setMessage("Unexpected error while starting payment. Please try again or contact the chamber.");
+      setIsProcessing(false);
+    }
   }
 
   return (
@@ -135,10 +336,10 @@ export default function PaymentForm() {
 
       <button
         type="submit"
-        disabled={!isValid}
+        disabled={!isValid || isProcessing}
         className="rounded-full bg-red-900 px-6 py-3 text-sm font-semibold text-white transition hover:bg-red-950 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600"
       >
-        Proceed to Secure Payment
+        {isProcessing ? "Please wait..." : "Proceed to Secure Payment"}
       </button>
 
       {message ? (
