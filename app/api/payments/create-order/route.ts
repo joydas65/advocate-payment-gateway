@@ -1,3 +1,7 @@
+import {
+  createPaymentNotes,
+  createPaymentReceipt,
+} from "@/lib/paymentMetadata";
 import { NextRequest, NextResponse } from "next/server";
 
 type CreateOrderRequest = {
@@ -83,7 +87,7 @@ export async function POST(request: NextRequest) {
     }
 
     const amountInPaise = Math.round(amount * 100);
-    const receipt = `ASP-${Date.now()}`;
+    const receipt = createPaymentReceipt();
 
     const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
 
@@ -97,13 +101,12 @@ export async function POST(request: NextRequest) {
         amount: amountInPaise,
         currency: "INR",
         receipt,
-        notes: {
-          clientName,
-          mobile,
-          email,
-          matterReference,
-          purpose: "Professional fees",
-        },
+        notes: createPaymentNotes({
+            clientName,
+            mobile,
+            email,
+            matterReference,
+        }),
       }),
       cache: "no-store",
     });
